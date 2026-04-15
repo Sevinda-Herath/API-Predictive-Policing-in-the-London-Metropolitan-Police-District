@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 # =============================================================================
@@ -61,6 +61,25 @@ FEATURES = [
 # Global variables to store loaded model and data
 model_package = None
 crime_df = None
+location_column = None
+
+LOCATION_COLUMN_CANDIDATES = [
+    "LSOA_Name",
+    "LSOA name",
+    "LSOA_NAME",
+    "LSOA_Code",
+    "LSOA code",
+    "LSOA_CODE",
+]
+FALLBACK_LOCATION_COLUMN = "LSOA_Name"
+
+
+def resolve_location_column(df: pd.DataFrame) -> Optional[str]:
+    """Pick the first available location-like column from known candidates."""
+    for col in LOCATION_COLUMN_CANDIDATES:
+        if col in df.columns:
+            return col
+    return None
 
 
 # =============================================================================
@@ -70,10 +89,12 @@ class PredictionRequest(BaseModel):
     """Request schema for crime prediction"""
     year: int = Field(..., description="Year (e.g., 2024)")
     month: int = Field(..., ge=1, le=12, description="Month (1-12)")
+    location_name: str = Field(..., description="LSOA location name")
 
 
 class CrimePrediction(BaseModel):
     """Individual crime prediction for a location"""
+    location_name: str
     latitude: float
     longitude: float
     location_area: float
@@ -87,9 +108,12 @@ class CrimePrediction(BaseModel):
 
 class PredictionResponse(BaseModel):
     """Response schema for crime predictions"""
+    model_config = ConfigDict(protected_namespaces=())
+
     status: str
     year: int
     month: int
+    location_name: str
     total_predictions: int
     total_predicted_crimes: float
     predictions: List[CrimePrediction]
@@ -104,7 +128,7 @@ class PredictionResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Load model and data on startup, cleanup on shutdown"""
-    global model_package, crime_df
+    global model_package, crime_df, location_column
     
     print("[STARTUP] Loading crime prediction model...")
     
@@ -122,9 +146,30 @@ async def lifespan(app: FastAPI):
         raise FileNotFoundError(f"Data not found at {DATA_PATH}")
     
     crime_df = pd.read_csv(DATA_PATH)
+
+    # Resolve location column, or build a stable fallback if source data has no LSOA name/code.
+    location_column = resolve_location_column(crime_df)
+    if location_column is None:
+        crime_df[FALLBACK_LOCATION_COLUMN] = (
+            "LSOA_"
+            + crime_df["LSOA_Latitude"].astype(float).round(5).astype(str)
+            + "_"
+            + crime_df["LSOA_Longitude"].astype(float).round(5).astype(str)
+        )
+        location_column = FALLBACK_LOCATION_COLUMN
+        print(
+            "! No LSOA name/code column found; generated fallback names "
+            "from coordinates in column 'LSOA_Name'."
+        )
+
+    if location_column != FALLBACK_LOCATION_COLUMN:
+        crime_df[FALLBACK_LOCATION_COLUMN] = crime_df[location_column].astype(str)
+        location_column = FALLBACK_LOCATION_COLUMN
+
     print(f"✓ Crime data loaded: {len(crime_df):,} records")
     print(f"✓ Years available: {sorted(crime_df['Year'].unique())}")
     print(f"✓ Months available: {sorted(crime_df['Month'].unique())}")
+    print(f"✓ Location column used: {location_column}")
     
     yield
     
@@ -182,15 +227,16 @@ async def model_info():
 @app.post("/predict", response_model=PredictionResponse, tags=["Predictions"])
 async def predict_crime(request: PredictionRequest):
     """
-    Predict crime count for all locations in a given year and month.
+    Predict crime count for a given year, month, and location.
     
     **Parameters:**
     - year: The year (e.g., 2024)
     - month: The month (1-12)
+    - location_name: LSOA location name
     
     **Returns:**
-    - List of predictions for all LSOA locations in that month
-    - Total predicted crimes
+    - Prediction for the requested location
+    - Total predicted crimes (for matched rows)
     - Confidence intervals
     """
     
@@ -201,15 +247,23 @@ async def predict_crime(request: PredictionRequest):
     
     year = request.year
     month = request.month
+    location_name = request.location_name.strip()
     
-    # Filter data for the requested year and month
-    mask = (crime_df["Year"] == year) & (crime_df["Month"] == month)
+    # Filter data for the requested year, month, and location (case-insensitive)
+    mask = (
+        (crime_df["Year"] == year)
+        & (crime_df["Month"] == month)
+        & (crime_df[location_column].astype(str).str.casefold() == location_name.casefold())
+    )
     data_subset = crime_df[mask].copy()
     
     if len(data_subset) == 0:
         raise HTTPException(
             status_code=404,
-            detail=f"No data found for year={year}, month={month}"
+            detail=(
+                f"No data found for year={year}, month={month}, "
+                f"location_name='{location_name}'"
+            ),
         )
     
     # Prepare features for prediction
@@ -238,6 +292,7 @@ async def predict_crime(request: PredictionRequest):
     predictions = []
     for idx, (_, row) in enumerate(data_subset.iterrows()):
         pred = CrimePrediction(
+            location_name=str(row[location_column]),
             latitude=float(row["LSOA_Latitude"]),
             longitude=float(row["LSOA_Longitude"]),
             location_area=float(row["LSOA_Shape_Area"]),
@@ -257,6 +312,7 @@ async def predict_crime(request: PredictionRequest):
         status="success",
         year=year,
         month=month,
+        location_name=location_name,
         total_predictions=len(predictions),
         total_predicted_crimes=float(np.sum(y_pred_mean)),
         predictions=predictions,
@@ -280,6 +336,7 @@ async def predict_crime_hotspots(
     **Parameters:**
     - year: The year (e.g., 2024)
     - month: The month (1-12)
+    - location_name: LSOA location name
     - hotspot_percentile: Top N% to mark as hotspots (default: 10)
     
     **Returns:**
@@ -294,15 +351,23 @@ async def predict_crime_hotspots(
     
     year = request.year
     month = request.month
+    location_name = request.location_name.strip()
     
     # Filter data
-    mask = (crime_df["Year"] == year) & (crime_df["Month"] == month)
+    mask = (
+        (crime_df["Year"] == year)
+        & (crime_df["Month"] == month)
+        & (crime_df[location_column].astype(str).str.casefold() == location_name.casefold())
+    )
     data_subset = crime_df[mask].copy()
     
     if len(data_subset) == 0:
         raise HTTPException(
             status_code=404,
-            detail=f"No data found for year={year}, month={month}"
+            detail=(
+                f"No data found for year={year}, month={month}, "
+                f"location_name='{location_name}'"
+            ),
         )
     
     # Prepare features
@@ -329,6 +394,7 @@ async def predict_crime_hotspots(
     predictions_with_hotspots = []
     for idx, (_, row) in enumerate(data_subset.iterrows()):
         predictions_with_hotspots.append({
+            "location_name": str(row[location_column]),
             "latitude": float(row["LSOA_Latitude"]),
             "longitude": float(row["LSOA_Longitude"]),
             "location_area": float(row["LSOA_Shape_Area"]),
@@ -352,6 +418,7 @@ async def predict_crime_hotspots(
         "status": "success",
         "year": year,
         "month": month,
+        "location_name": location_name,
         "total_predictions": len(predictions_with_hotspots),
         "total_predicted_crimes": float(total_crimes),
         "hotspot_analysis": {
@@ -377,7 +444,7 @@ async def predict_batch(requests: List[PredictionRequest]):
     Predict crime for multiple year-month combinations.
     
     **Parameters:**
-    - List of {year, month} objects
+    - List of {year, month, location_name} objects
     
     **Returns:**
     - Dictionary with predictions for each month
@@ -387,7 +454,7 @@ async def predict_batch(requests: List[PredictionRequest]):
     errors = {}
     
     for req in requests:
-        key = f"{req.year}-{req.month:02d}"
+        key = f"{req.year}-{req.month:02d}-{req.location_name}"
         try:
             # Reuse single prediction logic
             response = await predict_crime(req)
@@ -416,6 +483,8 @@ async def data_info():
     
     return {
         "total_records": len(crime_df),
+        "total_locations": int(crime_df[location_column].nunique()),
+        "location_column": location_column,
         "years": sorted(crime_df["Year"].unique().tolist()),
         "months": sorted(crime_df["Month"].unique().tolist()),
         "columns": crime_df.columns.tolist(),
@@ -425,6 +494,32 @@ async def data_info():
             "min_longitude": float(crime_df["LSOA_Longitude"].min()),
             "max_longitude": float(crime_df["LSOA_Longitude"].max()),
         },
+    }
+
+
+@app.get("/locations", tags=["Data Info"])
+async def list_locations(
+    limit: int = Query(100, ge=1, le=5000),
+    year: Optional[int] = Query(None, description="Optional year filter"),
+    month: Optional[int] = Query(None, ge=1, le=12, description="Optional month filter"),
+):
+    """List available location names for client input, with optional time filters."""
+    if crime_df is None:
+        raise HTTPException(status_code=503, detail="Crime data not loaded")
+
+    subset = crime_df
+    if year is not None:
+        subset = subset[subset["Year"] == year]
+    if month is not None:
+        subset = subset[subset["Month"] == month]
+
+    locations = sorted(subset[location_column].astype(str).dropna().unique().tolist())
+    return {
+        "location_column": location_column,
+        "total_locations": len(locations),
+        "returned": min(limit, len(locations)),
+        "filters": {"year": year, "month": month},
+        "locations": locations[:limit],
     }
 
 
@@ -444,6 +539,7 @@ async def root():
             "health": "/health",
             "model_info": "/model/info",
             "data_info": "/data/info",
+            "locations": "/locations",
             "predict": "/predict",
             "predict_hotspots": "/predict/hotspots",
             "predict_batch": "/predict/batch",

@@ -32,36 +32,49 @@ class CrimePredictionClient:
         response = requests.get(f"{self.base_url}/data/info")
         response.raise_for_status()
         return response.json()
+
+    def get_locations(self, limit: int = 100, year: int = None, month: int = None) -> Dict:
+        """List available location names for request input"""
+        params = {"limit": limit}
+        if year is not None:
+            params["year"] = year
+        if month is not None:
+            params["month"] = month
+        response = requests.get(f"{self.base_url}/locations", params=params)
+        response.raise_for_status()
+        return response.json()
     
-    def predict(self, year: int, month: int) -> Dict:
+    def predict(self, year: int, month: int, location_name: str) -> Dict:
         """
         Predict crime for a specific year and month
         
         Args:
             year: Year (e.g., 2024)
             month: Month (1-12)
+            location_name: LSOA location name
         
         Returns:
             Dictionary with predictions
         """
-        payload = {"year": year, "month": month}
+        payload = {"year": year, "month": month, "location_name": location_name}
         response = requests.post(f"{self.base_url}/predict", json=payload)
         response.raise_for_status()
         return response.json()
     
-    def predict_hotspots(self, year: int, month: int, hotspot_percentile: int = 10) -> Dict:
+    def predict_hotspots(self, year: int, month: int, location_name: str, hotspot_percentile: int = 10) -> Dict:
         """
         Predict crime and identify hotspots
         
         Args:
             year: Year (e.g., 2024)
             month: Month (1-12)
+            location_name: LSOA location name
             hotspot_percentile: Top N% to mark as hotspots (default: 10)
         
         Returns:
             Dictionary with predictions and hotspot analysis
         """
-        payload = {"year": year, "month": month}
+        payload = {"year": year, "month": month, "location_name": location_name}
         response = requests.post(
             f"{self.base_url}/predict/hotspots",
             json=payload,
@@ -75,12 +88,15 @@ class CrimePredictionClient:
         Predict crime for multiple year-month combinations
         
         Args:
-            requests_list: List of (year, month) tuples
+            requests_list: List of (year, month, location_name) tuples
         
         Returns:
             Dictionary with batch results
         """
-        payload = [{"year": year, "month": month} for year, month in requests_list]
+        payload = [
+            {"year": year, "month": month, "location_name": location_name}
+            for year, month, location_name in requests_list
+        ]
         response = requests.post(f"{self.base_url}/predict/batch", json=payload)
         response.raise_for_status()
         return response.json()
@@ -89,7 +105,11 @@ class CrimePredictionClient:
 def print_predictions(predictions_response: Dict, limit: int = 10):
     """Pretty print prediction results"""
     print(f"\n{'='*80}")
-    print(f"Crime Predictions for {predictions_response['year']}-{predictions_response['month']:02d}")
+    print(
+        f"Crime Predictions for {predictions_response['year']}-"
+        f"{predictions_response['month']:02d} | "
+        f"Location: {predictions_response['location_name']}"
+    )
     print(f"{'='*80}")
     print(f"Total Predictions: {predictions_response['total_predictions']}")
     print(f"Total Predicted Crimes: {predictions_response['total_predicted_crimes']:.2f}")
@@ -118,7 +138,11 @@ def print_predictions(predictions_response: Dict, limit: int = 10):
 def print_hotspot_analysis(hotspot_response: Dict, limit: int = 15):
     """Pretty print hotspot analysis results"""
     print(f"\n{'='*80}")
-    print(f"Hotspot Analysis for {hotspot_response['year']}-{hotspot_response['month']:02d}")
+    print(
+        f"Hotspot Analysis for {hotspot_response['year']}-"
+        f"{hotspot_response['month']:02d} | "
+        f"Location: {hotspot_response['location_name']}"
+    )
     print(f"{'='*80}")
     print(f"Total Predictions: {hotspot_response['total_predictions']}")
     print(f"Total Predicted Crimes: {hotspot_response['total_predicted_crimes']:.2f}")
@@ -174,22 +198,31 @@ if __name__ == "__main__":
     print(f"✓ Years: {data_info['years']}")
     print(f"✓ Months: {data_info['months']}\n")
     
+    locations = client.get_locations(limit=1, year=2024, month=1)
+    sample_location = locations["locations"][0]
+    print(f"✓ Sample location for requests: {sample_location}\n")
+
     # Single prediction
     print("4. Making a single prediction for 2024-01...")
-    prediction = client.predict(year=2024, month=1)
+    prediction = client.predict(year=2024, month=1, location_name=sample_location)
     print_predictions(prediction, limit=5)
     
     # Hotspot analysis
     print("\n5. Getting hotspot analysis for 2024-01...")
-    hotspots = client.predict_hotspots(year=2024, month=1, hotspot_percentile=10)
+    hotspots = client.predict_hotspots(
+        year=2024,
+        month=1,
+        location_name=sample_location,
+        hotspot_percentile=10,
+    )
     print_hotspot_analysis(hotspots, limit=10)
     
     # Batch prediction
     print("\n6. Making batch predictions for multiple months...")
     batch_results = client.predict_batch([
-        (2024, 1),
-        (2024, 2),
-        (2024, 3),
+        (2024, 1, sample_location),
+        (2024, 2, sample_location),
+        (2024, 3, sample_location),
     ])
     print(f"✓ Successful: {batch_results['successful']}/{batch_results['total_requests']}")
     if batch_results['errors']:

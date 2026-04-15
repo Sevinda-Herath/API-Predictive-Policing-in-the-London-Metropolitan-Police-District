@@ -4,7 +4,7 @@ A production-ready **FastAPI** application for predicting crime counts across Lo
 
 ## ✨ Features
 
-- 🎯 **Simple Input** - Just provide year and month
+- 🎯 **Simple Input** - Provide year, month, and location_name
 - 🔮 **Intelligent Predictions** - Model automatically extracts 30+ features
 - 🎪 **Multiple Endpoints** - Single predictions, hotsport analysis, batch processing
 - 📊 **Confidence Intervals** - 95% prediction intervals included
@@ -61,7 +61,7 @@ POST /predict/batch            # Batch predictions for multiple months
 ```bash
 curl -X POST http://localhost:8000/predict \
   -H "Content-Type: application/json" \
-  -d '{"year": 2024, "month": 1}'
+  -d '{"year": 2024, "month": 1, "location_name": "LSOA_51.52022_-0.09523"}'
 ```
 
 ### Example 2: Python Client
@@ -70,14 +70,14 @@ curl -X POST http://localhost:8000/predict \
 from client import CrimePredictionClient, print_predictions
 
 client = CrimePredictionClient()
-predictions = client.predict(year=2024, month=1)
+predictions = client.predict(year=2024, month=1, location_name="LSOA_51.52022_-0.09523")
 print_predictions(predictions, limit=10)
 ```
 
 ### Example 3: Get Hotspots
 
 ```python
-hotspots = client.predict_hotspots(year=2024, month=1, hotspot_percentile=10)
+hotspots = client.predict_hotspots(year=2024, month=1, location_name="LSOA_51.52022_-0.09523", hotspot_percentile=10)
 # Returns top 10% crime hotspots with concentration metrics
 ```
 
@@ -95,7 +95,8 @@ python examples.py
   "status": "success",
   "year": 2024,
   "month": 1,
-  "total_predictions": 4835,
+  "location_name": "LSOA_51.52022_-0.09523",
+  "total_predictions": 1,
   "total_predicted_crimes": 125430.45,
   "predictions": [
     {
@@ -144,13 +145,13 @@ Random Forest Model (30 features, 200 trees)
 
 ## 🎓 How It Works
 
-### 1️⃣ **Input**: Year & Month Only
+### 1️⃣ **Input**: Year + Month + Location Name
 ```python
-{"year": 2024, "month": 1}
+{"year": 2024, "month": 1, "location_name": "LSOA_51.52022_-0.09523"}
 ```
 
 ### 2️⃣ **The API**:
-- Filters dataset for that year/month
+- Filters dataset for that year/month/location
 - Extracts all 30 features automatically
 - Passes to Random Forest model
 - Calculates prediction intervals
@@ -158,7 +159,7 @@ Random Forest Model (30 features, 200 trees)
 ### 3️⃣ **Output**: Rich Predictions
 ```python
 {
-  "total_predictions": 4835,           # All LSOA locations
+  "total_predictions": 1,              # Prediction rows for the selected location
   "total_predicted_crimes": 125430.45,
   "predictions": [                    # Per-location details
     {
