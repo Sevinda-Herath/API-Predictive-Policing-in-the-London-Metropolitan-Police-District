@@ -33,7 +33,6 @@ python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 Server URLs:
 - API root: `http://localhost:8000/`
 - Swagger UI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
 - OpenAPI JSON: `http://localhost:8000/openapi.json`
 
 ## Endpoints
@@ -123,6 +122,54 @@ Example response:
     }
   ]
 }
+```
+
+### 3) Model Comparison Data (Generic)
+
+`GET /model-comparison/generic`
+
+Returns the contents of `model_comparison_generic.csv` as JSON rows.
+
+Example:
+
+```bash
+curl "http://localhost:8000/model-comparison/generic"
+```
+
+### 4) Model Comparison Data (Specific)
+
+`GET /model-comparison/specific`
+
+Returns the contents of `model_comparison_specific.csv` as JSON rows.
+
+Example:
+
+```bash
+curl "http://localhost:8000/model-comparison/specific"
+```
+
+### 5) HDA Image
+
+`GET /images/hda`
+
+Returns `hda.png`.
+
+Example:
+
+```bash
+curl -O "http://localhost:8000/images/hda"
+```
+
+### 6) MPC Image
+
+`GET /images/mpc`
+
+Returns `mpc.png`.
+
+Example:
+
+```bash
+curl -O "http://localhost:8000/images/mpc"
 ```
 
 ## Notes

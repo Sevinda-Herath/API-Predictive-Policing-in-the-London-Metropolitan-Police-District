@@ -7,11 +7,16 @@ import joblib
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, model_validator
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_PATH = BASE_DIR / "crime_data_2024.csv"
 MODEL_PATH = BASE_DIR / "random_forest_model.joblib"
+MODEL_COMPARISON_GENERIC_PATH = BASE_DIR / "model_comparison_generic.csv"
+MODEL_COMPARISON_SPECIFIC_PATH = BASE_DIR / "model_comparison_specific.csv"
+HDA_IMAGE_PATH = BASE_DIR / "hda.png"
+MPC_IMAGE_PATH = BASE_DIR / "mpc.png"
 
 app = FastAPI(
     title="Crime Count Prediction API",
@@ -21,7 +26,6 @@ app = FastAPI(
     ),
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc",
     openapi_url="/openapi.json",
 )
 
@@ -88,8 +92,11 @@ def root() -> dict[str, str]:
     return {
         "message": "Crime Count Prediction API is running.",
         "swagger_docs": "/docs",
-        "redoc": "/redoc",
         "openapi_schema": "/openapi.json",
+        "model_comparison_generic": "/model-comparison/generic",
+        "model_comparison_specific": "/model-comparison/specific",
+        "image_hda": "/images/hda",
+        "image_mpc": "/images/mpc",
     }
 
 
@@ -126,6 +133,38 @@ def _predict_from_rows(rows: pd.DataFrame) -> np.ndarray:
     features = rows[_features_used].astype(float)
     preds = _model.predict(features)
     return np.clip(preds, 0, None)
+
+
+@app.get("/model-comparison/generic")
+def get_model_comparison_generic() -> dict[str, Any]:
+    if not MODEL_COMPARISON_GENERIC_PATH.exists():
+        raise HTTPException(status_code=404, detail="model_comparison_generic.csv not found.")
+
+    data = pd.read_csv(MODEL_COMPARISON_GENERIC_PATH)
+    return {"rows": data.to_dict(orient="records")}
+
+
+@app.get("/model-comparison/specific")
+def get_model_comparison_specific() -> dict[str, Any]:
+    if not MODEL_COMPARISON_SPECIFIC_PATH.exists():
+        raise HTTPException(status_code=404, detail="model_comparison_specific.csv not found.")
+
+    data = pd.read_csv(MODEL_COMPARISON_SPECIFIC_PATH)
+    return {"rows": data.to_dict(orient="records")}
+
+
+@app.get("/images/hda")
+def get_hda_image() -> FileResponse:
+    if not HDA_IMAGE_PATH.exists():
+        raise HTTPException(status_code=404, detail="hda.png not found.")
+    return FileResponse(path=HDA_IMAGE_PATH, media_type="image/png", filename="hda.png")
+
+
+@app.get("/images/mpc")
+def get_mpc_image() -> FileResponse:
+    if not MPC_IMAGE_PATH.exists():
+        raise HTTPException(status_code=404, detail="mpc.png not found.")
+    return FileResponse(path=MPC_IMAGE_PATH, media_type="image/png", filename="mpc.png")
 
 
 @app.post("/predict")
